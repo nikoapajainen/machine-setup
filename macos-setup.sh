@@ -1,5 +1,8 @@
 #!/bin/bash
 
+# To make this script executable:
+# chmod +x macos-setup.sh
+
 LOG_FILE="$HOME/Desktop/setup-log.txt"
 CLI_SUMMARY_FILE="$HOME/Desktop/cli-tools-summary.txt"
 > "$LOG_FILE"
@@ -11,23 +14,44 @@ log() {
 
 install_brew_package() {
     local name=$1
-    log "Installing $name..."
-    if brew list "$name" >/dev/null 2>&1 || brew install "$name" >> "$LOG_FILE" 2>&1; then
-        log "$name: SUCCESS"
+    if [ "$VERBOSE" = true ]; then
+        echo "🔧 Installing $name..."
+        if brew list "$name" >/dev/null 2>&1 || brew install "$name"; then
+            echo "✅ $name installed"
+        else
+            echo "❌ $name failed"
+        fi
     else
-        log "$name: FAILED"
+        log "Installing $name..."
+        if brew list "$name" >/dev/null 2>&1 || brew install "$name" >> "$LOG_FILE" 2>&1; then
+            log "$name: SUCCESS"
+        else
+            log "$name: FAILED"
+        fi
     fi
 }
 
+
 install_cask_app() {
     local app=$1
-    log "Installing $app..."
-    if brew list --cask "$app" >/dev/null 2>&1 || brew install --cask "$app" >> "$LOG_FILE" 2>&1; then
-        log "$app: SUCCESS"
+    if [ "$VERBOSE" = true ]; then
+        echo "🧩 Installing $app..."
+        if brew list --cask "$app" >/dev/null 2>&1 || brew install --cask "$app"; then
+            echo "✅ $app installed"
+        else
+            echo "⚠️ $app failed. Retrying after uninstall..."
+            brew uninstall --cask --force "$app"
+            brew install --cask "$app" && echo "🔁 $app retry succeeded" || echo "❌ $app retry failed"
+        fi
     else
-        log "$app: FAILED. Attempting cleanup and retry..."
-        brew uninstall --cask --force "$app" >> "$LOG_FILE" 2>&1
-        brew install --cask "$app" >> "$LOG_FILE" 2>&1 && log "$app: RETRY SUCCESS" || log "$app: RETRY FAILED"
+        log "Installing $app..."
+        if brew list --cask "$app" >/dev/null 2>&1 || brew install --cask "$app" >> "$LOG_FILE" 2>&1; then
+            log "$app: SUCCESS"
+        else
+            log "$app: FAILED. Attempting cleanup and retry..."
+            brew uninstall --cask --force "$app" >> "$LOG_FILE" 2>&1
+            brew install --cask "$app" >> "$LOG_FILE" 2>&1 && log "$app: RETRY SUCCESS" || log "$app: RETRY FAILED"
+        fi
     fi
 }
 
@@ -58,9 +82,6 @@ else
     log "Homebrew already installed."
 fi
 
-log "Installing dockutil (for Dock cleanup)..."
-install_brew_package dockutil
-
 # Ensure Homebrew is in PATH (for VS Code and GUI apps)
 log "Ensuring Homebrew path is set in shell profile..."
 BREW_PATH_LINE='eval "$\(/opt/homebrew/bin/brew shellenv\)"'
@@ -75,14 +96,18 @@ fi
 grep -qxF "$BREW_PATH_LINE" "$SHELL_PROFILE" || echo "$BREW_PATH_LINE" >> "$SHELL_PROFILE"
 eval "$BREW_PATH_LINE"
 
+log "Installing dockutil (for Dock cleanup)..."
+install_brew_package dockutil
+
 log "Updating Homebrew..."
 brew update >> "$LOG_FILE" 2>&1
 
 # CLI Tools
-CLI_TOOLS=(
-    git gh azure-cli  awscli docker node nvm python jq httpie wget htop tree tmux watch 
-    fzf ripgrep fd bat zoxide neofetch mas powershell
-)
+if [ -n "$SELECTED_CLI_TOOLS" ]; then
+  IFS=',' read -r -a CLI_TOOLS <<< "$SELECTED_CLI_TOOLS"
+else
+  CLI_TOOLS=(git gh azure-cli awscli docker node nvm python jq httpie wget htop tree tmux watch fzf ripgrep fd bat zoxide neofetch mas powershell)
+fi
 
 for tool in "${CLI_TOOLS[@]}"; do
     install_brew_package "$tool"
@@ -90,9 +115,8 @@ done
 
 # CLI Summaries
 write_cli_summary "Git" "git --help"
-write_cli_summary "Bicep CLI (via Azure CLI)" "az bicep install && az bicep --help"
 write_cli_summary "Azure CLI" "az --help"
-write_cli_summary "Bicep CLI" "bicep --help"
+write_cli_summary "Bicep CLI (via Azure CLI)" "az bicep install && az bicep --help"
 write_cli_summary "AWS CLI" "aws help"
 write_cli_summary "Docker CLI" "docker --help"
 write_cli_summary "Node.js" "node --help"
@@ -106,14 +130,21 @@ write_cli_summary "htop (system monitor)" "htop"
 write_cli_summary "PowerShell (pwsh)" "pwsh --help"
 
 # Install Bicep CLI via Azure CLI
-log "Installing Bicep CLI via az..."
-az bicep install >> "$LOG_FILE" 2>&1 || log "Bicep CLI install via az failed"
+if [ "$VERBOSE" = true ]; then
+    echo "🔧 Installing Bicep CLI via az..."
+    az bicep install
+else
+    log "Installing Bicep CLI via az..."
+    az bicep install >> "$LOG_FILE" 2>&1 || log "Bicep CLI install via az failed"
+fi
+
 
 # GUI Apps
-CASK_APPS=(
-    brave-browser firefox visual-studio-code sublime-text github postman slack microsoft-teams spotify 
-    rectangle alfred microsoft-remote-desktop notion obsidian zoom docker discord iterm2 raycast
-)
+if [ -n "$SELECTED_GUI_APPS" ]; then
+  IFS=',' read -r -a CASK_APPS <<< "$SELECTED_GUI_APPS"
+else
+  CASK_APPS=(brave-browser firefox visual-studio-code sublime-text github postman slack microsoft-teams spotify rectangle alfred microsoft-remote-desktop notion obsidian zoom docker discord iterm2 raycast)
+fi
 
 for app in "${CASK_APPS[@]}"; do
     install_cask_app "$app"
@@ -142,6 +173,10 @@ log "Cleaning up Dock items..."
 dockutil --remove 'TV' --no-restart || true
 dockutil --remove 'Music' --no-restart || true
 dockutil --remove 'FaceTime' --no-restart || true
+
+log "Restarting Dock to apply changes..."
+killall Dock
+
 defaults write com.apple.finder AppleShowAllFiles -bool true
 killall Finder
 
@@ -151,7 +186,6 @@ defaults write com.apple.screencapture location "$HOME/Screenshots"
 defaults write com.apple.dock autohide -bool true
 defaults write com.apple.dock autohide-time-modifier -float 0.5
 defaults write com.apple.dock persistent-apps -array
-log "Restarting Dock to apply changes..."
 killall Dock
 
 # VS Code Extensions
